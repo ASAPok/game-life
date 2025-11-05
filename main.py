@@ -326,24 +326,65 @@ class GameOfLifeWidget(QWidget):
         self.cell_size = 10
         self.width_cells = 80
         self.height_cells = 60
-        self.grid = [[random.choice([0, 1]) for _ in range(self.width_cells)]
-                     for _ in range(self.height_cells)]
         self.running = True
         self.generation = 0
         self.mode = mode
         self.speed_value = 100
-        self.mode_label = mode
+        self.cell_color = QColor(0, 255, 0)
+        self.population = 0
+        self.prev_population = 0
+        self.stale_count = 0
+        self.initialize_grid()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_generation)
         self.timer.start(self.speed_value)
 
+    def initialize_grid(self):
+        if self.mode == 'chaos':
+            density = 0.7
+        elif self.mode == 'stable':
+            density = 0.35
+        elif self.mode == 'sparse':
+            density = 0.25
+        else:
+            density = 0.45
+
+        self.grid = [[1 if random.random() < density else 0 
+                      for _ in range(self.width_cells)]
+                     for _ in range(self.height_cells)]
+        self.count_population()
+        self.stale_count = 0
+
+    def count_population(self):
+        self.population = sum(sum(row) for row in self.grid)
+
     def get_rules(self):
         rules = {
-            'classic': {'survive': [2, 3], 'birth': 3},
-            'supervisor': {'survive': [2, 3, 4, 5], 'birth': 3},
-            'desert': {'survive': [3, 4, 5], 'birth': 4},
-            'symbiosis': {'survive': [2, 3, 4], 'birth': 3}
+            'classic': {
+                'survive': [2, 3],
+                'birth': 3,
+                'color': QColor(0, 255, 0),
+                'description': 'Классик'
+            },
+            'stable': {
+                'survive': [2, 3, 4],
+                'birth': 3,
+                'color': QColor(0, 200, 255),
+                'description': 'Стабильность'
+            },
+            'chaos': {
+                'survive': [2, 3],
+                'birth': [2, 3],
+                'color': QColor(255, 100, 0),
+                'description': 'Хаос'
+            },
+            'sparse': {
+                'survive': [2, 3, 4],
+                'birth': [3, 6],
+                'color': QColor(150, 255, 0),
+                'description': 'Редкость'
+            }
         }
         return rules.get(self.mode, rules['classic'])
 
@@ -361,10 +402,11 @@ class GameOfLifeWidget(QWidget):
     def update_generation(self):
         if not self.running:
             return
+        
         new_grid = [[0] * self.width_cells for _ in range(self.height_cells)]
         rules = self.get_rules()
         survive = rules['survive']
-        birth = rules['birth']
+        birth = rules['birth'] if isinstance(rules['birth'], list) else [rules['birth']]
 
         for r in range(self.height_cells):
             for c in range(self.width_cells):
@@ -373,12 +415,31 @@ class GameOfLifeWidget(QWidget):
                     if neighbors in survive:
                         new_grid[r][c] = 1
                 else:
-                    if neighbors == birth:
+                    if neighbors in birth:
                         new_grid[r][c] = 1
 
         self.grid = new_grid
         self.generation += 1
+        self.prev_population = self.population
+        self.count_population()
+        
+        if self.population == self.prev_population and self.population > 0:
+            self.stale_count += 1
+            if self.stale_count > 500:
+                self.inject_chaos()
+                self.stale_count = 0
+        else:
+            self.stale_count = 0
+        
         self.update()
+
+    def inject_chaos(self):
+        chaos_cells = max(5, self.population // 10)
+        for _ in range(chaos_cells):
+            r = random.randint(0, self.height_cells - 1)
+            c = random.randint(0, self.width_cells - 1)
+            self.grid[r][c] = 1 - self.grid[r][c]
+        self.count_population()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -389,23 +450,16 @@ class GameOfLifeWidget(QWidget):
                 if self.grid[r][c] == 1:
                     painter.fillRect(c * self.cell_size, r * self.cell_size,
                                      self.cell_size, self.cell_size,
-                                     QColor(0, 255, 0))
+                                     self.cell_color)
                 painter.drawRect(c * self.cell_size, r * self.cell_size,
                                  self.cell_size, self.cell_size)
 
-        painter.setPen(QColor(0, 255, 0))
-        painter.setFont(QFont("Arial", 10))
-        painter.drawText(10, 20, f"Режим: {self.mode_label}")
-
     def set_mode(self, new_mode):
         self.mode = new_mode
-        mode_names = {
-            'classic': 'Классик',
-            'supervisor': 'Супервайзер',
-            'desert': 'Пустыня',
-            'symbiosis': 'Симбиоз'
-        }
-        self.mode_label = mode_names.get(new_mode, 'Классик')
+        rules = self.get_rules()
+        self.cell_color = rules['color']
+        self.initialize_grid()
+        self.generation = 0
         self.update()
 
     def set_speed(self, speed):
@@ -416,15 +470,59 @@ class GameOfLifeWidget(QWidget):
         self.running = not self.running
 
     def reset_game(self):
-        self.grid = [[random.choice([0, 1]) for _ in range(self.width_cells)]
-                     for _ in range(self.height_cells)]
+        self.initialize_grid()
         self.generation = 0
         self.update()
 
     def clear_game(self):
         self.grid = [[0] * self.width_cells for _ in range(self.height_cells)]
         self.generation = 0
+        self.population = 0
         self.update()
+
+
+class InfoPanel(QWidget):
+    def __init__(self, game_widget):
+        super().__init__()
+        self.game_widget = game_widget
+        self.setStyleSheet("background-color: #1a1a1a; color: white;")
+        self.setFixedHeight(40)
+        
+        layout = QHBoxLayout()
+        layout.setContentsMargins(10, 5, 10, 5)
+        
+        self.mode_label = QLabel()
+        self.gen_label = QLabel()
+        self.pop_label = QLabel()
+        self.status_label = QLabel()
+        
+        self.mode_label.setStyleSheet("color: #00ff00; font-weight: bold;")
+        self.gen_label.setStyleSheet("color: #00ff00;")
+        self.pop_label.setStyleSheet("color: #00ff00;")
+        self.status_label.setStyleSheet("color: #00ff00;")
+        
+        layout.addWidget(self.mode_label)
+        layout.addSpacing(20)
+        layout.addWidget(self.gen_label)
+        layout.addSpacing(20)
+        layout.addWidget(self.pop_label)
+        layout.addSpacing(20)
+        layout.addWidget(self.status_label)
+        layout.addStretch()
+        
+        self.setLayout(layout)
+        
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_info)
+        self.update_timer.start(100)
+
+    def update_info(self):
+        rules = self.game_widget.get_rules()
+        self.mode_label.setText(f"Режим: {rules['description']}")
+        self.gen_label.setText(f"Поколение: {self.game_widget.generation}")
+        self.pop_label.setText(f"Население: {self.game_widget.population}")
+        status = "▶ ИДЕТ" if self.game_widget.running else "⏸ ПАУЗА"
+        self.status_label.setText(status)
 
 
 class MainWindow(QMainWindow):
@@ -432,10 +530,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Game of Life")
         self.game_widget = GameOfLifeWidget('classic')
+        self.info_panel = InfoPanel(self.game_widget)
 
         central_widget = QWidget()
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
+        main_layout.addWidget(self.info_panel)
         main_layout.addWidget(self.game_widget, 1)
 
         btn_layout = QHBoxLayout()
@@ -455,17 +557,17 @@ class MainWindow(QMainWindow):
         classic_btn.clicked.connect(lambda: self.change_mode('classic'))
         btn_layout.addWidget(classic_btn)
 
-        supervisor_btn = QPushButton("Супервайзер")
-        supervisor_btn.clicked.connect(lambda: self.change_mode('supervisor'))
-        btn_layout.addWidget(supervisor_btn)
+        stable_btn = QPushButton("Стабильность")
+        stable_btn.clicked.connect(lambda: self.change_mode('stable'))
+        btn_layout.addWidget(stable_btn)
 
-        desert_btn = QPushButton("Пустыня")
-        desert_btn.clicked.connect(lambda: self.change_mode('desert'))
-        btn_layout.addWidget(desert_btn)
+        chaos_btn = QPushButton("Хаос")
+        chaos_btn.clicked.connect(lambda: self.change_mode('chaos'))
+        btn_layout.addWidget(chaos_btn)
 
-        symbiosis_btn = QPushButton("Симбиоз")
-        symbiosis_btn.clicked.connect(lambda: self.change_mode('symbiosis'))
-        btn_layout.addWidget(symbiosis_btn)
+        sparse_btn = QPushButton("Редкость")
+        sparse_btn.clicked.connect(lambda: self.change_mode('sparse'))
+        btn_layout.addWidget(sparse_btn)
 
         main_layout.addLayout(btn_layout)
 
@@ -483,7 +585,7 @@ class MainWindow(QMainWindow):
 
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
-        self.setFixedSize(800, 700)
+        self.setFixedSize(800, 720)
 
     def change_mode(self, mode):
         self.game_widget.set_mode(mode)
